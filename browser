@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+trap halt EXIT
+function halt {
+    sudo init 0
+}
+sudo dpkg -i /var/cache/apt/archives/warsaw_setup64.deb
+/usr/local/bin/warsaw/core
+google-chrome --start-fullscreen --no-first-run --no-default-browser-check https://www.bb.com.br
