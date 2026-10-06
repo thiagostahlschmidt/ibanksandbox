@@ -1,0 +1,42 @@
+#!/bin/bash
+# Installs (or upgrades to) the latest Google Chrome and Warsaw, plus pending Debian updates.
+# Runs at image build time (no systemd) and inside a booted sandbox (`ibank.sh upgrade`).
+set -euo pipefail
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+chmod 755 "$tmp"
+
+wget -q --tries=3 -O "$tmp/chrome.deb" "$CHROME_URL"
+wget -q --tries=3 -O "$tmp/warsaw.run" "$WARSAW_URL"
+# the .run is an ELF with a zip appended; the zip holds warsaw_<version>_amd64.deb
+python3 - "$tmp/warsaw.run" "$tmp/warsaw.deb" <<'EOF'
+import shutil, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    deb = next(n for n in z.namelist() if n.endswith('_amd64.deb'))
+    with z.open(deb) as src, open(sys.argv[2], 'wb') as dst:
+        shutil.copyfileobj(src, dst)
+EOF
+
+if [[ $(cat /proc/1/comm) != systemd ]]; then
+    # warsaw's maintainer scripts call systemctl daemon-reload/start, which fail while systemd
+    # isn't running: divert systemctl and let only the verbs that work offline through.
+    # (a stub earlier in PATH isn't enough: apt runs dpkg with its own PATH)
+    dpkg-divert --local --rename --add /usr/bin/systemctl
+    cat > /usr/bin/systemctl <<'EOF'
+#!/bin/sh
+case "$1" in enable|disable|mask|unmask|is-enabled) SYSTEMD_OFFLINE=1 exec /usr/bin/systemctl.distrib "$@" ;; esac
+EOF
+    chmod 755 /usr/bin/systemctl
+    trap 'rm -rf "$tmp" /usr/bin/systemctl; dpkg-divert --local --rename --remove /usr/bin/systemctl' EXIT
+fi
+
+# accepts the warsaw EULA: the postinst turns this into /usr/local/etc/warsaw/EULA
+touch /tmp/EULA
+
+apt-get update
+apt-get full-upgrade -y
+apt-get install -y --no-install-recommends "$tmp/chrome.deb" "$tmp/warsaw.deb"
+apt-get autoremove -y
+apt-get clean
+rm -rf /var/lib/apt/lists/*

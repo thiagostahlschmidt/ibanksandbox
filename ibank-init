@@ -1,0 +1,51 @@
+#!/bin/bash
+# Container entrypoint: gives the sandbox a stable machine identity, then hands PID 1 to systemd.
+#
+# The identity is created on the first boot and lives inside the container filesystem, so
+# `ibank.sh save` commits it into the image and `ibank.sh export` carries it to other machines.
+set -uo pipefail
+
+ID_DIR=/var/lib/ibank
+ID_FILE=${ID_DIR}/identity
+DMI_FIELDS="bios_vendor bios_version bios_date board_vendor board_name board_version board_serial
+            chassis_vendor chassis_serial product_name product_version product_serial product_uuid sys_vendor"
+
+warn() { echo "ibank-init: $*" >&2; }
+
+if [[ ! -f $ID_FILE ]]; then
+  mkdir -p "${ID_DIR}/proc" "${ID_DIR}/dmi"
+  {
+    echo "IBANK_HOSTNAME=$(cat /proc/sys/kernel/hostname)"
+    echo "IBANK_MACHINE_ID=$(tr -d - </proc/sys/kernel/random/uuid)"
+    printf 'IBANK_MAC=02:%s:%s:%s:%s:%s\n' $(od -An -N5 -tx1 /dev/urandom)
+  } >"$ID_FILE"
+  # Hardware as seen on the machine where the identity was born.
+  cp /proc/cpuinfo /proc/meminfo "${ID_DIR}/proc/"
+  # cp keeps the original modes: serials and product_uuid stay readable by root only
+  for f in $DMI_FIELDS; do
+    cp "/sys/class/dmi/id/$f" "${ID_DIR}/dmi/" 2>/dev/null
+  done
+  warn "new identity created in $ID_FILE"
+fi
+
+source "$ID_FILE"
+
+echo "$IBANK_MACHINE_ID" >/etc/machine-id
+mkdir -p /var/lib/dbus && ln -sf /etc/machine-id /var/lib/dbus/machine-id
+
+echo "$IBANK_HOSTNAME" >/proc/sys/kernel/hostname || warn "could not set hostname"
+echo "$IBANK_HOSTNAME" >/etc/hostname
+grep -qw "$IBANK_HOSTNAME" /etc/hosts || echo "127.0.1.1 $IBANK_HOSTNAME" >>/etc/hosts
+
+if [[ -e /sys/class/net/eth0 ]]; then
+  ip link set dev eth0 address "$IBANK_MAC" || warn "could not set MAC address"
+fi
+
+for f in "${ID_DIR}"/proc/*; do
+  mount --bind "$f" "/proc/${f##*/}" || warn "could not pin /proc/${f##*/}"
+done
+for f in "${ID_DIR}"/dmi/*; do
+  [[ -e /sys/class/dmi/id/${f##*/} ]] && { mount --bind "$f" "/sys/class/dmi/id/${f##*/}" || warn "could not pin DMI ${f##*/}"; }
+done
+
+exec "$@"

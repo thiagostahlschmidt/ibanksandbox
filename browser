@@ -1,9 +1,16 @@
 #!/bin/bash
-set -e
-trap halt EXIT
-function halt {
-    sudo init 0
-}
-sudo dpkg -i /var/cache/apt/archives/warsaw_setup64.deb
-/usr/local/bin/warsaw/core
-google-chrome --start-fullscreen --no-first-run --no-default-browser-check https://www.bb.com.br
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+export LIBGL_ALWAYS_SOFTWARE=1
+trap 'sudo poweroff' EXIT
+
+sudo systemctl start bankusr-session.service
+for _ in {1..30}; do
+  pgrep -u "$(id -u)" -x core >/dev/null && break
+  sleep 0.5
+done
+
+sleep 2
+
+google-chrome --start-fullscreen --no-first-run --no-default-browser-check \
+  --password-store=basic "${IBANK_URL:-https://www.bb.com.br}"

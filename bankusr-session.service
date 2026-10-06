@@ -1,0 +1,13 @@
+# What logind (masked: the container is privileged) would give bankusr: /run/user/1000 and a
+# session bus there. Started by `browser`: warsaw's root core spawns the per-user core (which
+# registers its CA in Chrome's NSS DB) when that directory appears while a process of the user
+# has DISPLAY set. (warsaw watches /run/user from startup: systemd's own tmpfiles.d creates it.)
+[Unit]
+Description=Session bus for bankusr
+After=dbus.service warsaw.service
+
+[Service]
+User=bankusr
+ExecStartPre=+/usr/bin/install -d -o bankusr -g bankusr -m 0700 /run/user/1000
+ExecStopPost=+/bin/rm -rf /run/user/1000
+ExecStart=/usr/bin/dbus-daemon --session --nofork --nopidfile --address=unix:path=/run/user/1000/bus
